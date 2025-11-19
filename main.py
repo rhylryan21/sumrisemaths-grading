@@ -8,7 +8,7 @@ app = FastAPI(title="Sumrise Maths – Grading API")
 # Allow calls from the Next.js dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "https://sumrise-maths.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
