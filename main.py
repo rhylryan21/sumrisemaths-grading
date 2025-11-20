@@ -60,13 +60,13 @@ def evaluate(req: EvalRequest):
     expr = (req.expr or "").strip()
     # 1) Validate length and characters
     if not expr:
-        return {"ok": False, "error": "Please enter an expression (e.g., 3^2 + 4^2)."}
+        return {"ok": False, "feedback": "Please enter an expression (e.g., 3^2 + 4^2)."}
     logger.info("expr raw=%r chars=%s", expr, [f"{c}:{ord(c)}" for c in expr])
 
     if not ALLOWED_RE.fullmatch(expr):
         return {
             "ok": False,
-            "error": "Only digits, + - * / ^ ( ) . and spaces are allowed (max 100 chars).",
+            "feedback": "Only digits, + - * / ^ ( ) . and spaces are allowed (max 100 chars).",
         }
     try:
         expr_norm = expr.replace("^", "**")
