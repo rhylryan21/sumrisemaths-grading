@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.dist-info/
+.build/
+.pytest_cache/
+coverage.xml
+htmlcov/
+.coverage*
+
+# Virtual env
+.venv/
+
+# Mac
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
