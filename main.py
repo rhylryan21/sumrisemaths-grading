@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from questions import QUESTIONS
+from bank import QUESTIONS
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
