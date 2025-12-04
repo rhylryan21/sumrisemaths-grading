@@ -13,24 +13,35 @@ from bank import QUESTIONS, reload_bank  # replace old import of QUESTIONS if ne
 
 
 def _canonical_fraction_str(expr_str: str) -> tuple[str, list[str]]:
-    """Return simplified fraction 'a/b' and optional steps."""
+    """
+    Return a simplified fraction "a/b" and short steps.
+    Accepts inputs like "6/8", "0.75", "3^2/4^2", etc.
+    """
     expr_norm = (expr_str or "").replace("^", "**").strip()
 
-    # If it's a pure a/b with integers, show proper GCD steps
-    if "/" in expr_norm and all(p.strip().lstrip("+-").isdigit() for p in expr_norm.split("/", 1)):
-        n_str, d_str = expr_norm.split("/", 1)
-        n, d = int(n_str), int(d_str)
-        if d == 0:
-            raise ValueError("division by zero")
-        g = gcd(abs(n), abs(d)) or 1
-        steps = [f"Start: {n}/{d}", f"GCD({abs(n)},{abs(d)}) = {g}", f"Simplify: {n//g}/{d//g}"]
-        return f"{n//g}/{d//g}", steps
+    # If it's a plain integer fraction a/b, show real GCD steps.
+    if "/" in expr_norm:
+        num_str, den_str = expr_norm.split("/", 1)
+        num_str, den_str = num_str.strip(), den_str.strip()
+        # allow +/-, digits only to avoid accidental floats here
+        if num_str.lstrip("+-").isdigit() and den_str.lstrip("+-").isdigit():
+            n, d = int(num_str), int(den_str)
+            if d == 0:
+                raise ValueError("division by zero")
+            g = gcd(abs(n), abs(d)) or 1
+            steps = [
+                f"Start: {n}/{d}",
+                f"GCD({abs(n)},{abs(d)}) = {g}",
+                f"Simplify: {n//g}/{d//g}",
+            ]
+            return f"{n//g}/{d//g}", steps
 
-    # Otherwise, let sympy find a rational and simplify
-    val = nsimplify(sympify(expr_norm))
+    # Otherwise, let sympy evaluate and reduce
+    val = nsimplify(sympify(expr_norm))  # exact rational if possible
     if not isinstance(val, Rational):
         val = Rational(val).limit_denominator()
-    return f"{int(val.p)}/{int(val.q)}", [f"Converted to fraction: {int(val.p)}/{int(val.q)}"]
+    n, d = int(val.p), int(val.q)
+    return f"{n}/{d}", [f"Converted to fraction: {n}/{d}"]
 
 
 logger = logging.getLogger("sumrise-grading")
@@ -127,11 +138,16 @@ def evaluate(req: EvalRequest):
 
 @app.get("/questions", response_model=List[QuestionOut])
 def get_questions():
-    # Return questions without the answer field
     return [
-        QuestionOut(id=q["id"], topic=q["topic"], prompt=q["prompt"], type=q["type"])
+        {"id": q["id"], "topic": q["topic"], "prompt": q["prompt"], "type": q["type"]}
         for q in QUESTIONS
     ]
+
+
+def _eval_numeric(expr_str: str) -> float:
+    expr_norm = (expr_str or "").replace("^", "**")
+    val = sympify(expr_norm).evalf()
+    return float(val)
 
 
 @app.post("/mark", response_model=MarkResponse)
@@ -140,15 +156,12 @@ def mark(req: MarkRequest):
     if not q:
         return MarkResponse(ok=False, correct=False, score=0, feedback="Unknown question id.")
 
-    if q["type"] == "numeric":
-        # ... your existing numeric logic ...
-        ...
+    expr = (req.answer or "").strip()
 
-    elif q["type"] == "simplify_fraction":
-        expr = (req.answer or "").strip()
+    if q["type"] == "numeric":
         if not expr:
             return MarkResponse(
-                ok=False, correct=False, score=0, feedback="Please enter your answer (e.g., 3/4)."
+                ok=False, correct=False, score=0, feedback="Please enter your answer (e.g., 25)."
             )
         if not ALLOWED_RE.fullmatch(expr):
             return MarkResponse(
@@ -158,29 +171,119 @@ def mark(req: MarkRequest):
                 feedback="Only digits, + - * / ^ ( ) . and spaces allowed (max 100 chars).",
             )
         try:
-            expected_str, expected_steps = _canonical_fraction_str(q["answer_expr"])
-            user_str, _ = _canonical_fraction_str(expr)
-            correct = user_str == expected_str
+            expected = _eval_numeric(q["answer_expr"])
+            user_val = _eval_numeric(expr)
+            correct = abs(user_val - expected) < TOL
             return MarkResponse(
                 ok=True,
                 correct=correct,
                 score=1 if correct else 0,
-                feedback="Correct ✅" if correct else "Not quite. Try fully reducing the fraction.",
-                expected_str=expected_str,
-                steps=expected_steps if correct else None,
+                feedback="Correct ✅" if correct else "Not quite.",
+                expected=expected,
             )
         except Exception:
+            logger.exception("/mark numeric failed id=%r answer=%r", req.id, req.answer)
+            return MarkResponse(
+                ok=False,
+                correct=False,
+                score=0,
+                feedback="I couldn't parse that. Check brackets and operators.",
+            )
+
+    elif q["type"] == "simplify_fraction":
+
+        expr = (req.answer or "").strip()
+
+        if not expr:
+            return MarkResponse(
+                ok=False, correct=False, score=0, feedback="Please enter your answer (e.g., 3/4)."
+            )
+
+        if not ALLOWED_RE.fullmatch(expr):
+            return MarkResponse(
+                ok=False,
+                correct=False,
+                score=0,
+                feedback="Only digits, + - * / ^ ( ) . and spaces allowed (max 100 chars).",
+            )
+
+        try:
+
+            # Determine if user entered a plain integer fraction a/b
+
+            provided_fraction = False
+
+            fully_reduced = True
+
+            if "/" in expr:
+
+                num_str, den_str = expr.split("/", 1)
+
+                num_str, den_str = num_str.strip(), den_str.strip()
+
+                if num_str.lstrip("+-").isdigit() and den_str.lstrip("+-").isdigit():
+
+                    provided_fraction = True
+
+                    n, d = int(num_str), int(den_str)
+
+                    if d == 0:
+                        return MarkResponse(
+                            ok=False, correct=False, score=0, feedback="Denominator cannot be zero."
+                        )
+
+                    g = gcd(abs(n), abs(d)) or 1
+
+                    fully_reduced = g == 1
+
+            expected_str, expected_steps = _canonical_fraction_str(q["answer_expr"])
+
+            user_str, _ = _canonical_fraction_str(expr)
+
+            if user_str == expected_str:
+
+                # If user typed a fraction, insist on simplest form
+
+                if provided_fraction and not fully_reduced:
+                    return MarkResponse(
+                        ok=True,
+                        correct=False,
+                        score=0,
+                        feedback="Close — give your answer in simplest form.",
+                        expected_str=expected_str,
+                    )
+
+                # Decimals (e.g. 0.75) or already-reduced fractions are fine
+
+                return MarkResponse(
+                    ok=True,
+                    correct=True,
+                    score=1,
+                    feedback="Correct ✅",
+                    expected_str=expected_str,
+                    steps=expected_steps,
+                )
+
+            # Equivalent value but different target (shouldn't happen here)
+
+            return MarkResponse(
+                ok=True,
+                correct=False,
+                score=0,
+                feedback="Not quite. Try fully reducing the fraction.",
+                expected_str=expected_str,
+            )
+
+        except Exception:
+
             logger.exception("/mark simplify_fraction failed id=%r answer=%r", req.id, req.answer)
+
             return MarkResponse(
                 ok=False,
                 correct=False,
                 score=0,
                 feedback="I couldn't parse that. Try a form like 3/4 or 0.75.",
             )
-    else:
-        return MarkResponse(
-            ok=False, correct=False, score=0, feedback="This question type isn't supported yet."
-        )
 
 
 @app.post("/admin/reload")
