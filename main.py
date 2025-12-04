@@ -1,14 +1,16 @@
-import os
-from fastapi import FastAPI, Header
-from bank import QUESTIONS, reload_bank  # replace old import of QUESTIONS if needed
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional
-from sympy import sympify
 import logging
+import os
 import re
-from sympy import sympify, nsimplify, Rational
 from math import gcd
+from typing import List, Optional
+
+from fastapi import FastAPI, Header
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sympy import Rational, nsimplify, sympify
+
+from bank import QUESTIONS, reload_bank  # replace old import of QUESTIONS if needed
+
 
 def _canonical_fraction_str(expr_str: str) -> tuple[str, list[str]]:
     """Return simplified fraction 'a/b' and optional steps."""
@@ -29,6 +31,7 @@ def _canonical_fraction_str(expr_str: str) -> tuple[str, list[str]]:
     if not isinstance(val, Rational):
         val = Rational(val).limit_denominator()
     return f"{int(val.p)}/{int(val.q)}", [f"Converted to fraction: {int(val.p)}/{int(val.q)}"]
+
 
 logger = logging.getLogger("sumrise-grading")
 logging.basicConfig(level=logging.INFO)
@@ -144,14 +147,20 @@ def mark(req: MarkRequest):
     elif q["type"] == "simplify_fraction":
         expr = (req.answer or "").strip()
         if not expr:
-            return MarkResponse(ok=False, correct=False, score=0, feedback="Please enter your answer (e.g., 3/4).")
+            return MarkResponse(
+                ok=False, correct=False, score=0, feedback="Please enter your answer (e.g., 3/4)."
+            )
         if not ALLOWED_RE.fullmatch(expr):
-            return MarkResponse(ok=False, correct=False, score=0,
-                                feedback="Only digits, + - * / ^ ( ) . and spaces allowed (max 100 chars).")
+            return MarkResponse(
+                ok=False,
+                correct=False,
+                score=0,
+                feedback="Only digits, + - * / ^ ( ) . and spaces allowed (max 100 chars).",
+            )
         try:
             expected_str, expected_steps = _canonical_fraction_str(q["answer_expr"])
             user_str, _ = _canonical_fraction_str(expr)
-            correct = (user_str == expected_str)
+            correct = user_str == expected_str
             return MarkResponse(
                 ok=True,
                 correct=correct,
@@ -162,10 +171,16 @@ def mark(req: MarkRequest):
             )
         except Exception:
             logger.exception("/mark simplify_fraction failed id=%r answer=%r", req.id, req.answer)
-            return MarkResponse(ok=False, correct=False, score=0,
-                                feedback="I couldn't parse that. Try a form like 3/4 or 0.75.")
+            return MarkResponse(
+                ok=False,
+                correct=False,
+                score=0,
+                feedback="I couldn't parse that. Try a form like 3/4 or 0.75.",
+            )
     else:
-        return MarkResponse(ok=False, correct=False, score=0, feedback="This question type isn't supported yet.")
+        return MarkResponse(
+            ok=False, correct=False, score=0, feedback="This question type isn't supported yet."
+        )
 
 
 @app.post("/admin/reload")

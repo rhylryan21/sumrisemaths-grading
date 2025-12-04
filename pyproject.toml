@@ -1,0 +1,17 @@
+[tool.black]
+line-length = 100
+# omit target-version to auto-detect; safe with Python 3.14
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | \.mypy_cache
+  | \.pytest_cache
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
