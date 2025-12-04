@@ -9,19 +9,26 @@ class Question(BaseModel):
     topic: str
     prompt: str
     answer_expr: str
-    type: str  # e.g., "numeric"
+    type: str
 
 
-def load_questions(path: str | None = None) -> List[dict]:
-    p = (
-        pathlib.Path(path)
-        if path
-        else pathlib.Path(__file__).with_name("questions.json")
-    )
-    data = json.loads(p.read_text(encoding="utf-8"))
-    # validate and return as plain dicts
-    return [Question(**q).model_dump() for q in data]
+_bank_path = pathlib.Path(__file__).with_name("questions.json")
 
 
-# Eager load at import time (simple for now)
-QUESTIONS = load_questions()
+def _read() -> list[dict]:
+    return json.loads(_bank_path.read_text(encoding="utf-8"))
+
+
+def _validate(raw: list[dict]) -> list[dict]:
+    return [Question(**q).model_dump() for q in raw]
+
+
+# in-memory cache
+QUESTIONS: list[dict] = _validate(_read())
+
+
+def reload_bank() -> int:
+    """Reload questions.json into the in-memory QUESTIONS list."""
+    global QUESTIONS
+    QUESTIONS = _validate(_read())
+    return len(QUESTIONS)

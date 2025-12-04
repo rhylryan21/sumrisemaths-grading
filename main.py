@@ -1,5 +1,6 @@
-from fastapi import FastAPI
-from bank import QUESTIONS
+import os
+from fastapi import FastAPI, Header
+from bank import QUESTIONS, reload_bank  # replace old import of QUESTIONS if needed
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
@@ -11,6 +12,7 @@ logger = logging.getLogger("sumrise-grading")
 logging.basicConfig(level=logging.INFO)
 
 ALLOWED_RE = re.compile(r"[0-9\s+\-*/^().]{1,100}")
+
 app = FastAPI(title="Sumrise Maths – Grading API")
 
 # Allow calls from the Next.js dev server
@@ -154,3 +156,15 @@ def mark(req: MarkRequest):
             score=0,
             feedback="Sorry, I couldn't parse that. Try a simpler numeric answer.",
         )
+
+
+@app.post("/admin/reload")
+def admin_reload(x_admin_token: str | None = Header(default=None)):
+    token = os.getenv("ADMIN_TOKEN", "")  # <-- read at request time
+    if not token:
+        return {"ok": False, "error": "ADMIN_TOKEN not configured on server."}
+    if x_admin_token != token:
+        return {"ok": False, "error": "Unauthorized."}
+    n = reload_bank()
+    logger.info("/admin/reload: reloaded %s questions", n)
+    return {"ok": True, "count": n}
