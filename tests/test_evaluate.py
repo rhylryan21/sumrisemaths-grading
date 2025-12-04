@@ -20,7 +20,7 @@ def test_evaluate_invalid_chars():
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is False
-    assert "allowed" in data.get("error", "").lower()
+    assert "allowed" in data.get("feedback", "").lower()
 
 def test_evaluate_len_limit():
     r = client.post("/evaluate", json={"expr": "1" * 101})
