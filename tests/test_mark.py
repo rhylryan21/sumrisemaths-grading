@@ -40,3 +40,19 @@ def test_mark_unknown_id():
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is False and body["score"] == 0
+
+def test_mark_simplify_fraction_correct():
+    r = client.post("/mark", json={"id": "q4", "answer": "3/4"})
+    b = r.json()
+    assert b["ok"] and b["correct"] and b["score"] == 1
+    assert b.get("expected_str") == "3/4"
+
+def test_mark_simplify_fraction_equivalent_decimal():
+    r = client.post("/mark", json={"id": "q4", "answer": "0.75"})
+    b = r.json()
+    assert b["ok"] and b["correct"]
+
+def test_mark_simplify_fraction_not_reduced():
+    r = client.post("/mark", json={"id": "q4", "answer": "6/8"})
+    b = r.json()
+    assert b["ok"] and not b["correct"] and b["score"] == 0
