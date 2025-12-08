@@ -14,6 +14,9 @@ htmlcov/
 
 # Virtual env
 .venv/
+venv/
+**/.venv/
+**/venv/
 
 # Mac
 .DS_Store
