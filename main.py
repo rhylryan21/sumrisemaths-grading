@@ -4,9 +4,10 @@ import re
 from math import gcd
 from typing import List, Optional
 
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import text
 from sympy import Rational, nsimplify, sympify
 
 from bank import QUESTIONS, reload_bank  # replace old import of QUESTIONS if needed
@@ -358,3 +359,14 @@ def get_attempt(attempt_id: int):
         return AttemptOut.from_orm_row(a)
     finally:
         db.close()
+
+
+@app.get("/health/db")
+def health_db():
+    # Use engine.connect() and a SQLAlchemy textual SQL object
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"db_error: {type(e).__name__}: {e}")
