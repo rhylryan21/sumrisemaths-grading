@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from sympy import Rational, nsimplify, sympify
 
 from bank import QUESTIONS, reload_bank  # replace old import of QUESTIONS if needed
+from db import Base, SessionLocal, engine
+from models import Attempt
 
 logger = logging.getLogger("sumrise-grading")
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +19,7 @@ logging.basicConfig(level=logging.INFO)
 ALLOWED_RE = re.compile(r"[0-9\s+\-*/^().]{1,100}")
 
 app = FastAPI(title="Sumrise Maths – Grading API")
+Base.metadata.create_all(bind=engine)
 
 # Allow calls from the Next.js dev server
 app.add_middleware(
@@ -77,6 +80,7 @@ class MarkBatchResponse(BaseModel):
     total: int
     correct: int
     results: List[MarkBatchResult]
+    attempt_id: Optional[int] = None
 
 
 TOL = 1e-6
@@ -289,6 +293,21 @@ def mark_batch(req: MarkBatchRequest):
         if r.correct:
             correct += 1
         results.append(MarkBatchResult(id=it.id, response=r))
+    # persist the summary
+    try:
+        db = SessionLocal()
+        attempt = Attempt(
+            total=len(req.items),
+            correct=correct,
+            items=[{"id": r.id, "response": r.response.model_dump()} for r in results],
+        )
+        db.add(attempt)
+        db.commit()
+        attempt_id = attempt.id
+    finally:
+        db.close()
+
+    # include attempt_id in response (optional)
     return MarkBatchResponse(ok=True, total=len(req.items), correct=correct, results=results)
 
 
