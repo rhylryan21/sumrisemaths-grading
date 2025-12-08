@@ -83,6 +83,25 @@ class MarkBatchResponse(BaseModel):
     attempt_id: Optional[int] = None
 
 
+class AttemptOut(BaseModel):
+    id: int
+    created_at: str
+    total: int
+    correct: int
+    items: list
+
+    @classmethod
+    def from_orm_row(cls, a) -> "AttemptOut":
+        # created_at -> ISO string for easy use on the web
+        return cls(
+            id=a.id,
+            created_at=a.created_at.isoformat(),
+            total=a.total,
+            correct=a.correct,
+            items=a.items,
+        )
+
+
 TOL = 1e-6
 
 
@@ -294,6 +313,7 @@ def mark_batch(req: MarkBatchRequest):
             correct += 1
         results.append(MarkBatchResult(id=it.id, response=r))
     # persist the summary
+    attempt_id = None
     try:
         db = SessionLocal()
         attempt = Attempt(
@@ -308,7 +328,9 @@ def mark_batch(req: MarkBatchRequest):
         db.close()
 
     # include attempt_id in response (optional)
-    return MarkBatchResponse(ok=True, total=len(req.items), correct=correct, results=results)
+    return MarkBatchResponse(
+        ok=True, total=len(req.items), correct=correct, results=results, attempt_id=attempt_id
+    )
 
 
 @app.post("/admin/reload")
@@ -321,3 +343,18 @@ def admin_reload(x_admin_token: str | None = Header(default=None)):
     n = reload_bank()
     logger.info("/admin/reload: reloaded %s questions", n)
     return {"ok": True, "count": n}
+
+
+@app.get("/attempts/{attempt_id}", response_model=AttemptOut)
+def get_attempt(attempt_id: int):
+    db = SessionLocal()
+    try:
+        a = db.query(Attempt).filter(Attempt.id == attempt_id).first()
+        if not a:
+            # FastAPI will make this a 404 if you prefer:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Attempt not found")
+        return AttemptOut.from_orm_row(a)
+    finally:
+        db.close()
