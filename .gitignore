@@ -24,3 +24,8 @@ venv/
 # Editor
 .vscode/
 .idea/
+
+# Local dev DB
+services/grading/grading.db
+*.db
+*.sqlite
