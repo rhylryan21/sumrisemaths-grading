@@ -20,7 +20,6 @@ logging.basicConfig(level=logging.INFO)
 ALLOWED_RE = re.compile(r"[0-9\s+\-*/^().]{1,100}")
 
 app = FastAPI(title="Sumrise Maths – Grading API")
-Base.metadata.create_all(bind=engine)
 
 # Allow calls from the Next.js dev server
 app.add_middleware(
