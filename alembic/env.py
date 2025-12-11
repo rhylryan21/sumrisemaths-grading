@@ -4,7 +4,7 @@ import os
 import sys
 from logging.config import fileConfig
 
-from sqlalchemy import create_engine, engine_from_config, pool, text
+from sqlalchemy import create_engine, pool
 
 from alembic import context
 
@@ -28,7 +28,27 @@ try:
     from db import DATABASE_URL, Base  # running from services/grading
 except Exception:
     from services.grading.db import DATABASE_URL, Base  # running from project root / IDE
+
+# Ensure models are imported so tables are registered on Base.metadata during autogenerate
+try:
+    import models as _models  # when running from grading project root (CWD)
+except Exception as e1:
+    try:
+        from services.grading import models as _models  # when running from monorepo root / IDE
+    except Exception as e2:
+        raise RuntimeError(
+            "Alembic could not import the models module. "
+            "Make sure you run Alembic from the grading project, or that PYTHONPATH includes it."
+        ) from e2
+
 target_metadata = Base.metadata
+
+# Safety check: ensure key tables are registered in metadata; otherwise autogenerate may emit destructive diffs
+if "attempts" not in target_metadata.tables:
+    raise RuntimeError(
+        "Alembic autogenerate safety: 'attempts' is not present in Base.metadata. "
+        "Ensure models are imported and that Attempt.__tablename__ = 'attempts'."
+    )
 
 
 def run_migrations_offline() -> None:
