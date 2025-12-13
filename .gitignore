@@ -1,31 +1,63 @@
+# ----------------------------
 # Python
+# ----------------------------
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 *.so
 *.egg-info/
-.dist-info/
+*.dist-info/
 .build/
 .pytest_cache/
-coverage.xml
+**/.pytest_cache/
 htmlcov/
+coverage.xml
 .coverage*
+.mypy_cache/
+.ruff_cache/
 
-# Virtual env
+# ----------------------------
+# Virtual environments
+# ----------------------------
 .venv/
 venv/
 **/.venv/
 **/venv/
 
-# Mac
+# ----------------------------
+# OS / Editors
+# ----------------------------
 .DS_Store
-
-# Editor
 .vscode/
 .idea/
 
-# Local dev DB
-services/grading/grading.db
+# ----------------------------
+# Environment files (keep examples)
+# ----------------------------
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# ----------------------------
+# Databases / local state
+# ----------------------------
 *.db
 *.sqlite
+*.sqlite3
+
+# ----------------------------
+# Node / Next.js (safety net; web/ has its own .gitignore)
+# ----------------------------
+web/.next/
+web/node_modules/
+web/.vercel/
+
+# ----------------------------
+# Build artifacts
+# ----------------------------
+build/
+dist/
