@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sympy import Rational, nsimplify, sympify
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from bank import QUESTIONS, reload_bank  # replace old import of QUESTIONS if needed
 from db import Base, SessionLocal, engine
 from models import Attempt
@@ -104,6 +106,13 @@ class AttemptOut(BaseModel):
 
 
 TOL = 1e-6
+
+
+def _alembic_heads() -> list[str]:
+    # Alembic reads from alembic.ini at the project root (works locally + on Render)
+    cfg = Config("alembic.ini")
+    script = ScriptDirectory.from_config(cfg)
+    return list(script.get_heads())
 
 
 def _eval_numeric(expr_str: str) -> float:
@@ -380,9 +389,34 @@ def health_db():
 
 @app.get("/health/migrations")
 def health_migrations():
+    heads = []
+    db_ver = None
+    try:
+        heads = _alembic_heads()
+    except Exception as e:
+        # Still try to report DB version even if code heads fail
+        pass
+
     try:
         with engine.connect() as conn:
-            row = conn.execute(text("select version_num from alembic_version")).first()
-        return {"ok": True, "version": row[0] if row else None}
+            try:
+                db_ver = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one_or_none()
+            except Exception:
+                db_ver = None  # table doesn’t exist yet
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {
+            "ok": False,
+            "error": f"db_connect_failed: {e}",
+            "code_heads": heads,
+            "db_version": db_ver,
+        }
+
+    synced = (db_ver in heads) if heads else False
+    return {
+        "ok": synced,
+        "synced": synced,
+        "db_version": db_ver,
+        "code_heads": heads,
+    }
