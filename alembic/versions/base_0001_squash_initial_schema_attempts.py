@@ -1,22 +1,12 @@
-"""baseline
-
-Revision ID: 1eb7884120f0
-Revises: 858ce7f30108
-Create Date: 2025-12-08 19:40:16.250527
-
-"""
-
-from typing import Sequence, Union
-
 import sqlalchemy as sa
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "1eb7884120f0"
-down_revision: Union[str, Sequence[str], None] = "858ce7f30108"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision = "base_0001"
+down_revision = None  # <-- new base of the tree
+branch_labels = None
+depends_on = None
 
 
 def upgrade() -> None:
@@ -27,6 +17,7 @@ def upgrade() -> None:
         sa.Column("total", sa.Integer(), nullable=False),
         sa.Column("correct", sa.Integer(), nullable=False),
         sa.Column("items", sa.JSON(), nullable=False),
+        sa.Column("duration_ms", sa.Integer(), nullable=True),
     )
     op.create_index("ix_attempts_created_at", "attempts", ["created_at"])
 
