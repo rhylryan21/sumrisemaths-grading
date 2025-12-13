@@ -1,9 +1,0 @@
-[
-  {
-    "id": "q4",
-    "topic": "fractions",
-    "prompt": "Simplify 6/8",
-    "type": "simplify_fraction",
-    "answer_expr": "3/4"
-  }
-]
