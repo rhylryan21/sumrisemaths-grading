@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import time
 from math import gcd
 from typing import List, Optional
 
@@ -305,6 +306,7 @@ def mark(req: MarkRequest):
 
 @app.post("/mark-batch", response_model=MarkBatchResponse)
 def mark_batch(req: MarkBatchRequest):
+    start_ns = time.perf_counter_ns()
     results: List[MarkBatchResult] = []
     correct = 0
     for it in req.items:
@@ -312,6 +314,9 @@ def mark_batch(req: MarkBatchRequest):
         if r.correct:
             correct += 1
         results.append(MarkBatchResult(id=it.id, response=r))
+    # measure duration up to here (marking work only)
+    end_ns = time.perf_counter_ns()
+    duration_ms = (end_ns - start_ns) // 1_000_000
     # persist the summary
     attempt_id = None
     try:
@@ -320,9 +325,11 @@ def mark_batch(req: MarkBatchRequest):
             total=len(req.items),
             correct=correct,
             items=[{"id": r.id, "response": r.response.model_dump()} for r in results],
+            duration_ms=duration_ms,
         )
         db.add(attempt)
         db.commit()
+        db.refresh(attempt)
         attempt_id = attempt.id
     finally:
         db.close()
@@ -369,3 +376,13 @@ def health_db():
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"db_error: {type(e).__name__}: {e}")
+
+
+@app.get("/health/migrations")
+def health_migrations():
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("select version_num from alembic_version")).first()
+        return {"ok": True, "version": row[0] if row else None}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
