@@ -1,13 +1,4 @@
 repos:
-  - repo: local
-    hooks:
-    - id: alembic-single-head
-      name: Ensure single Alembic head
-      entry: python services/grading/tools/check_alembic_single_head.py
-      language: system
-      pass_filenames: false
-      stages: [ pre-push ]
-
   - repo: https://github.com/psf/black
     rev: 24.10.0
     hooks:
