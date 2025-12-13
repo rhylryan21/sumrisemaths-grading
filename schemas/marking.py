@@ -1,17 +1,24 @@
+# services/grading/schemas/marking.py
+from __future__ import annotations
+
 from typing import List, Optional
 
 from pydantic import BaseModel
 
+# ---------- Evaluate ----------
 
-class EvalRequest(BaseModel):
+
+class EvaluateRequest(BaseModel):
     expr: str
 
 
-class QuestionOut(BaseModel):
-    id: str
-    topic: str
-    prompt: str
-    type: str
+class EvaluateResponse(BaseModel):
+    ok: bool
+    value: Optional[float] = None
+    feedback: Optional[str] = None
+
+
+# ---------- Mark single ----------
 
 
 class MarkRequest(BaseModel):
@@ -24,28 +31,27 @@ class MarkResponse(BaseModel):
     correct: bool
     score: int
     feedback: str
-    expected: Optional[float] = None
+    # present for fraction questions; harmless to leave optional otherwise
+    expected: Optional[str] = None
     expected_str: Optional[str] = None
-    steps: Optional[List[str]] = None
+
+
+# ---------- Mark batch ----------
 
 
 class MarkBatchItem(BaseModel):
     id: str
-    answer: str
+    response: MarkResponse
 
 
 class MarkBatchRequest(BaseModel):
-    items: List[MarkBatchItem]
-
-
-class MarkBatchResult(BaseModel):
-    id: str
-    response: MarkResponse
+    items: List[MarkRequest]
+    # Client may send it, but server computes its own duration anyway.
+    duration_ms: Optional[int] = None
 
 
 class MarkBatchResponse(BaseModel):
     ok: bool
     total: int
-    correct: int
-    results: List[MarkBatchResult]
+    results: List[MarkBatchItem]
     attempt_id: Optional[int] = None

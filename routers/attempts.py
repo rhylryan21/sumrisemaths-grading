@@ -31,10 +31,10 @@ def attempts_recent(request: Request, limit: int = 20):
 
 
 @router.get("/{attempt_id}", response_model=AttemptOut)
-def get_attempt(request: Request, attempt_id: int):
-    _check_admin(request)  # remove if you want this public
+def get_attempt(attempt_id: int):
+    # Public endpoint: no admin token required
     with SessionLocal() as db:
         a = db.get(Attempt, attempt_id)
         if not a:
             raise HTTPException(status_code=404, detail="Attempt not found")
-        return a  # FastAPI serializes via response_model
+        return AttemptOut.model_validate(a)

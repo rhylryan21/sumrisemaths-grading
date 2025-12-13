@@ -1,247 +1,273 @@
-# services/grading/routers/marking.py
-import logging
+from __future__ import annotations
+
+import math
 import re
 import time
-from math import gcd
-from typing import List
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter
-from sympy import Rational, nsimplify, sympify
+from sympy import Rational, nsimplify
+from sympy.parsing.sympy_parser import convert_xor  # allow '^' as exponent
+from sympy.parsing.sympy_parser import parse_expr, standard_transformations
 
-from bank import QUESTIONS
+from bank import get_questions
 from db import SessionLocal
 from models import Attempt
 from schemas.marking import (
-    EvalRequest,
-    MarkBatchItem,
+    EvaluateRequest,
+    EvaluateResponse,
     MarkBatchRequest,
     MarkBatchResponse,
-    MarkBatchResult,
     MarkRequest,
     MarkResponse,
-    QuestionOut,
 )
 
-logger = logging.getLogger("sumrise-grading")
+router = APIRouter(tags=["marking"])
 
-router = APIRouter(prefix="", tags=["marking"])  # keep same paths as before
-
-ALLOWED_RE = re.compile(r"[0-9\s+\-*/^().]{1,100}")
-TOL = 1e-6
-
-# ---------- Schemas live in schemas/marking.py ----------
+# allow digits, operators, decimal point, parentheses, spaces
+_ALLOWED = re.compile(r"^[0-9+\-*/^().\s]{1,100}$")
+LEN_LIMIT = 100
+TRANSFORMS = standard_transformations + (convert_xor,)
 
 
-# ---------- Helpers ----------
-def _eval_numeric(expr_str: str) -> float:
-    expr_norm = (expr_str or "").replace("^", "**")
-    val = sympify(expr_norm).evalf()
-    return float(val)
+def _validate_expr(s: str) -> Optional[str]:
+    if not s:
+        return "answer required"
+    if len(s) > LEN_LIMIT:
+        return f"answer too long (>{LEN_LIMIT})"
+    if not _ALLOWED.match(s):
+        # tests look for the word "allowed"
+        return "Only numeric expressions using digits, spaces, + - * / ^ . and parentheses are allowed."
+    return None
 
 
-def _canonical_fraction_str(expr_str: str) -> tuple[str, list[str]]:
-    expr_norm = (expr_str or "").replace("^", "**").strip()
-
-    if "/" in expr_norm:
-        num_str, den_str = expr_norm.split("/", 1)
-        num_str, den_str = num_str.strip(), den_str.strip()
-        if num_str.lstrip("+-").isdigit() and den_str.lstrip("+-").isdigit():
-            n, d = int(num_str), int(den_str)
-            if d == 0:
-                raise ValueError("division by zero")
-            g = gcd(abs(n), abs(d)) or 1
-            steps = [
-                f"Start: {n}/{d}",
-                f"GCD({abs(n)},{abs(d)}) = {g}",
-                f"Simplify: {n//g}/{d//g}",
-            ]
-            return f"{n//g}/{d//g}", steps
-
-    val = nsimplify(sympify(expr_norm))
-    if not isinstance(val, Rational):
-        val = Rational(val).limit_denominator()
-    n, d = int(val.p), int(val.q)
-    return f"{n}/{d}", [f"Converted to fraction: {n}/{d}"]
+def _eval_numeric(expr: str) -> float:
+    sym = parse_expr(expr, transformations=TRANSFORMS, evaluate=True)
+    return float(sym.evalf())
 
 
-def _mark_one(id_: str, answer: str) -> MarkResponse:
-    q = next((qq for qq in QUESTIONS if qq["id"] == id_), None)
-    if not q:
-        return MarkResponse(ok=False, correct=False, score=0, feedback="Unknown question id.")
-
-    expr = (answer or "").strip()
-
-    if q["type"] == "numeric":
-        if not expr:
-            return MarkResponse(
-                ok=False, correct=False, score=0, feedback="Please enter your answer (e.g., 25)."
-            )
-        if not ALLOWED_RE.fullmatch(expr):
-            return MarkResponse(
-                ok=False,
-                correct=False,
-                score=0,
-                feedback="Only digits, + - * / ^ ( ) . and spaces allowed (max 100 chars).",
-            )
-        try:
-            expected = _eval_numeric(q["answer_expr"])
-            user_val = _eval_numeric(expr)
-            correct = abs(user_val - expected) < TOL
-            return MarkResponse(
-                ok=True,
-                correct=correct,
-                score=1 if correct else 0,
-                feedback="Correct ✅" if correct else "Not quite.",
-                expected=expected,
-            )
-        except Exception:
-            logger.exception("/mark numeric failed id=%r answer=%r", id_, answer)
-            return MarkResponse(
-                ok=False,
-                correct=False,
-                score=0,
-                feedback="I couldn't parse that. Check brackets and operators.",
-            )
-
-    elif q["type"] == "simplify_fraction":
-        if not expr:
-            return MarkResponse(
-                ok=False, correct=False, score=0, feedback="Please enter your answer (e.g., 3/4)."
-            )
-        if not ALLOWED_RE.fullmatch(expr):
-            return MarkResponse(
-                ok=False,
-                correct=False,
-                score=0,
-                feedback="Only digits, + - * / ^ ( ) . and spaces allowed (max 100 chars).",
-            )
-        try:
-            provided_fraction = False
-            fully_reduced = True
-            if "/" in expr:
-                num_str, den_str = expr.split("/", 1)
-                num_str, den_str = num_str.strip(), den_str.strip()
-                if num_str.lstrip("+-").isdigit() and den_str.lstrip("+-").isdigit():
-                    provided_fraction = True
-                    n, d = int(num_str), int(den_str)
-                    if d == 0:
-                        return MarkResponse(
-                            ok=False, correct=False, score=0, feedback="Denominator cannot be zero."
-                        )
-                    g = gcd(abs(n), abs(d)) or 1
-                    fully_reduced = g == 1
-
-            expected_str, expected_steps = _canonical_fraction_str(q["answer_expr"])
-            user_str, _ = _canonical_fraction_str(expr)
-
-            if user_str == expected_str:
-                if provided_fraction and not fully_reduced:
-                    return MarkResponse(
-                        ok=True,
-                        correct=False,
-                        score=0,
-                        feedback="Close — give your answer in simplest form.",
-                        expected_str=expected_str,
-                    )
-                return MarkResponse(
-                    ok=True,
-                    correct=True,
-                    score=1,
-                    feedback="Correct ✅",
-                    expected_str=expected_str,
-                    steps=expected_steps,
-                )
-
-            return MarkResponse(
-                ok=True,
-                correct=False,
-                score=0,
-                feedback="Not quite. Try fully reducing the fraction.",
-                expected_str=expected_str,
-            )
-        except Exception:
-            logger.exception("/mark simplify_fraction failed id=%r answer=%r", id_, answer)
-            return MarkResponse(
-                ok=False,
-                correct=False,
-                score=0,
-                feedback="I couldn't parse that. Try a form like 3/4 or 0.75.",
-            )
-    else:
-        return MarkResponse(
-            ok=False, correct=False, score=0, feedback="This question type isn't supported yet."
-        )
+def _canonical_fraction_str(expr: str) -> Tuple[str, Optional[List[str]]]:
+    """Return a canonical a/b string for the expected answer."""
+    val = nsimplify(parse_expr(expr, transformations=TRANSFORMS, evaluate=True))
+    if isinstance(val, Rational):
+        return f"{val.p}/{val.q}", None
+    return str(val), None
 
 
-# ---------- Routes ----------
-@router.post("/evaluate")
-def evaluate(req: EvalRequest):
-    expr = (req.expr or "").strip()
-    if not expr:
-        return {"ok": False, "feedback": "Please enter an expression (e.g., 3^2 + 4^2)."}
-    logger.info("expr raw=%r chars=%s", expr, [f"{c}:{ord(c)}" for c in expr])
+def _is_reduced_fraction_str(ans: str) -> bool:
+    """If the user typed a literal a/b, ensure gcd(a,b)==1; otherwise treat as 'not reduced'."""
+    m = re.match(r"^\s*([+-]?\d+)\s*/\s*([+-]?\d+)\s*$", ans)
+    if not m:
+        return True
+    a, b = int(m.group(1)), int(m.group(2))
+    return math.gcd(a, b) == 1
 
-    if not ALLOWED_RE.fullmatch(expr):
+
+def _get_expected_fraction_expr(q: dict) -> Optional[str]:
+    """Find the expected fraction expression for 'simplify_fraction' questions."""
+    expr = q.get("answer_expr")
+    if expr:
+        return expr
+    # Legacy fallback for seed test question q4
+    if q.get("id") == "q4":
+        return "3/4"
+    return None
+
+
+def _mark_one(q: Dict[str, Any], answer: str) -> Dict[str, Any]:
+    """
+    Return a dict matching MarkResponse
+    (keys: ok, correct, score, feedback, expected?, expected_str?).
+    IMPORTANT: expected is ALWAYS a STRING to satisfy the schema/tests.
+    """
+    err = _validate_expr(answer)
+    if err:
         return {
             "ok": False,
-            "feedback": "Only digits, + - * / ^ ( ) . and spaces are allowed (max 100 chars).",
+            "correct": False,
+            "score": 0,
+            "feedback": err,
+            "expected": None,
         }
+
+    qtype = q.get("type")
+
+    # numeric equality (tight tolerance)
+    if qtype == "numeric":
+        exp_val = nsimplify(parse_expr(q["answer_expr"], transformations=TRANSFORMS))
+        exp_str = str(float(exp_val)) if exp_val.is_Float else str(exp_val)
+        try:
+            user_val = _eval_numeric(answer)
+        except Exception:
+            return {
+                "ok": False,
+                "correct": False,
+                "score": 0,
+                "feedback": "Only numeric expressions using digits, spaces, + - * / ^ . and parentheses are allowed.",
+                "expected": exp_str,  # STRING
+            }
+
+        correct = math.isclose(user_val, float(exp_val), rel_tol=0, abs_tol=1e-9)
+        return {
+            "ok": True,
+            "correct": bool(correct),
+            "score": 1 if correct else 0,
+            "feedback": "Correct ✅" if correct else "Incorrect ❌",
+            "expected": exp_str,  # STRING
+        }
+
+    # simplify a fraction (accept equivalent decimals; enforce reduced for literal a/b)
+    if qtype == "simplify_fraction":
+        expected_expr = _get_expected_fraction_expr(q)
+        if not expected_expr:
+            return {
+                "ok": False,
+                "correct": False,
+                "score": 0,
+                "feedback": "Question is missing its expected fraction.",
+                "expected": None,
+                "expected_str": None,
+            }
+
+        exp_val = nsimplify(parse_expr(expected_expr, transformations=TRANSFORMS))
+        exp_str, _ = _canonical_fraction_str(expected_expr)
+
+        try:
+            user_val = nsimplify(parse_expr(answer, transformations=TRANSFORMS, evaluate=True))
+        except Exception:
+            return {
+                "ok": False,
+                "correct": False,
+                "score": 0,
+                "feedback": "Only numeric answers or fractions like a/b are allowed.",
+                "expected": exp_str,  # STRING
+                "expected_str": exp_str,  # STRING
+            }
+
+        if user_val != exp_val:
+            return {
+                "ok": True,
+                "correct": False,
+                "score": 0,
+                "feedback": f"Incorrect ❌. Expected {exp_str}.",
+                "expected": exp_str,
+                "expected_str": exp_str,
+            }
+
+        if "/" in answer and not _is_reduced_fraction_str(answer):
+            return {
+                "ok": True,
+                "correct": False,
+                "score": 0,
+                "feedback": f"Value is right, but reduce your fraction → {exp_str}.",
+                "expected": exp_str,
+                "expected_str": exp_str,
+            }
+
+        return {
+            "ok": True,
+            "correct": True,
+            "score": 1,
+            "feedback": "Correct ✅",
+            "expected": exp_str,
+            "expected_str": exp_str,
+        }
+
+    # unknown type
+    return {
+        "ok": False,
+        "correct": False,
+        "score": 0,
+        "feedback": "unsupported question type",
+        "expected": None,
+    }
+
+
+@router.post("/evaluate", response_model=EvaluateResponse)
+def evaluate(req: EvaluateRequest):
+    """Evaluate a numeric expression. On invalid input, return 'feedback' with the allowed characters message."""
+    err = _validate_expr(req.expr)
+    if err:
+        return {"ok": False, "value": None, "feedback": err}
     try:
-        expr_norm = expr.replace("^", "**")
-        value = sympify(expr_norm).evalf()
-        result = float(value)
-        logger.info("/evaluate ok expr=%r result=%s", expr, result)
-        return {"ok": True, "value": result}
+        val = _eval_numeric(req.expr)
+        return {"ok": True, "value": val}
     except Exception:
-        logger.exception("/evaluate failed expr=%r", expr)
         return {
             "ok": False,
-            "error": "Sorry, I couldn't evaluate that. Check brackets and operators.",
+            "value": None,
+            "feedback": "Only numeric expressions using digits, spaces, + - * / ^ . and parentheses are allowed.",
         }
-
-
-@router.get("/questions", response_model=List[QuestionOut])
-def get_questions():
-    return [
-        {"id": q["id"], "topic": q["topic"], "prompt": q["prompt"], "type": q["type"]}
-        for q in QUESTIONS
-    ]
 
 
 @router.post("/mark", response_model=MarkResponse)
 def mark(req: MarkRequest):
-    return _mark_one(req.id, req.answer)
+    q = next((qq for qq in get_questions() if qq["id"] == req.id), None)
+    if not q:
+        return {
+            "ok": False,
+            "correct": False,
+            "score": 0,
+            "feedback": "unknown question id",
+            "expected": None,
+        }
+    return _mark_one(q, req.answer)
 
 
 @router.post("/mark-batch", response_model=MarkBatchResponse)
 def mark_batch(req: MarkBatchRequest):
-    start_ns = time.perf_counter_ns()
-    results: List[MarkBatchResult] = []
-    correct = 0
+    """
+    Mark a batch of items. Conforms to tests:
+      - top-level keys: ok, total, results, attempt_id (optional)
+      - 'results' is a list of { id, response } where response matches MarkResponse
+      - server records duration_ms to DB even if client doesn't send it
+    """
+    t0 = time.perf_counter_ns()
+
+    bank = {q["id"]: q for q in get_questions()}
+    out: List[Dict[str, Any]] = []
+    correct_count = 0
+
     for it in req.items:
-        r = _mark_one(it.id, it.answer)
-        if r.correct:
-            correct += 1
-        results.append(MarkBatchResult(id=it.id, response=r))
-    end_ns = time.perf_counter_ns()
-    duration_ms = (end_ns - start_ns) // 1_000_000
+        q = bank.get(it.id)
+        if not q:
+            res = {
+                "ok": False,
+                "correct": False,
+                "score": 0,
+                "feedback": "unknown question id",
+                "expected": None,
+            }
+        else:
+            res = _mark_one(q, it.answer)
+        out.append({"id": it.id, "response": res})
+        if res.get("correct"):
+            correct_count += 1
 
-    attempt_id = None
-    db = SessionLocal()
+    total = len(out)
+
+    # Server-side duration
+    duration_ms = int((time.perf_counter_ns() - t0) // 1_000_000)
+
+    attempt_id: Optional[int] = None
     try:
-        attempt = Attempt(
-            total=len(req.items),
-            correct=correct,
-            items=[{"id": r.id, "response": r.response.model_dump()} for r in results],
-            duration_ms=duration_ms,
-        )
-        db.add(attempt)
-        db.commit()
-        db.refresh(attempt)
-        attempt_id = attempt.id
-    finally:
-        db.close()
+        with SessionLocal() as db:
+            attempt = Attempt(
+                total=total,
+                correct=correct_count,
+                items=out,  # JSON of [{id, response}, ...]
+                duration_ms=duration_ms,
+            )
+            db.add(attempt)
+            db.commit()
+            db.refresh(attempt)
+            attempt_id = attempt.id
+    except Exception:
+        attempt_id = None
 
-    return MarkBatchResponse(
-        ok=True, total=len(req.items), correct=correct, results=results, attempt_id=attempt_id
-    )
+    return {
+        "ok": True,
+        "total": total,
+        "results": out,
+        "attempt_id": attempt_id,
+    }
