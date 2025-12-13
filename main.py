@@ -16,6 +16,8 @@ from alembic.script import ScriptDirectory
 from bank import QUESTIONS, reload_bank  # replace old import of QUESTIONS if needed
 from db import Base, SessionLocal, engine
 from models import Attempt
+from routers.admin import router as admin_router
+from routers.attempts import router as attempts_router
 
 logger = logging.getLogger("sumrise-grading")
 logging.basicConfig(level=logging.INFO)
@@ -349,33 +351,6 @@ def mark_batch(req: MarkBatchRequest):
     )
 
 
-@app.post("/admin/reload")
-def admin_reload(x_admin_token: str | None = Header(default=None)):
-    token = os.getenv("ADMIN_TOKEN", "")  # <-- read at request time
-    if not token:
-        return {"ok": False, "error": "ADMIN_TOKEN not configured on server."}
-    if x_admin_token != token:
-        return {"ok": False, "error": "Unauthorized."}
-    n = reload_bank()
-    logger.info("/admin/reload: reloaded %s questions", n)
-    return {"ok": True, "count": n}
-
-
-@app.get("/attempts/{attempt_id}", response_model=AttemptOut)
-def get_attempt(attempt_id: int):
-    db = SessionLocal()
-    try:
-        a = db.query(Attempt).filter(Attempt.id == attempt_id).first()
-        if not a:
-            # FastAPI will make this a 404 if you prefer:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=404, detail="Attempt not found")
-        return AttemptOut.from_orm_row(a)
-    finally:
-        db.close()
-
-
 @app.get("/health/db")
 def health_db():
     # Use engine.connect() and a SQLAlchemy textual SQL object
@@ -420,3 +395,7 @@ def health_migrations():
         "db_version": db_ver,
         "code_heads": heads,
     }
+
+
+app.include_router(attempts_router)
+app.include_router(admin_router)
