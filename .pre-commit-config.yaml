@@ -3,7 +3,7 @@ repos:
     hooks:
     - id: alembic-single-head
       name: Ensure single Alembic head
-      entry: python services/grading/tools/check_alembic_single_head.py
+      entry: python tools/check_alembic_single_head.py
       language: system
       pass_filenames: false
       stages: [ pre-push ]
