@@ -18,6 +18,7 @@ from db import Base, SessionLocal, engine
 from models import Attempt
 from routers.admin import router as admin_router
 from routers.attempts import router as attempts_router
+from routers.health import router as health_router
 
 logger = logging.getLogger("sumrise-grading")
 logging.basicConfig(level=logging.INFO)
@@ -351,51 +352,6 @@ def mark_batch(req: MarkBatchRequest):
     )
 
 
-@app.get("/health/db")
-def health_db():
-    # Use engine.connect() and a SQLAlchemy textual SQL object
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return {"ok": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"db_error: {type(e).__name__}: {e}")
-
-
-@app.get("/health/migrations")
-def health_migrations():
-    heads = []
-    db_ver = None
-    try:
-        heads = _alembic_heads()
-    except Exception as e:
-        # Still try to report DB version even if code heads fail
-        pass
-
-    try:
-        with engine.connect() as conn:
-            try:
-                db_ver = conn.execute(
-                    text("SELECT version_num FROM alembic_version")
-                ).scalar_one_or_none()
-            except Exception:
-                db_ver = None  # table doesn’t exist yet
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": f"db_connect_failed: {e}",
-            "code_heads": heads,
-            "db_version": db_ver,
-        }
-
-    synced = (db_ver in heads) if heads else False
-    return {
-        "ok": synced,
-        "synced": synced,
-        "db_version": db_ver,
-        "code_heads": heads,
-    }
-
-
 app.include_router(attempts_router)
 app.include_router(admin_router)
+app.include_router(health_router)
