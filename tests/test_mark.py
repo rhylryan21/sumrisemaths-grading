@@ -60,3 +60,27 @@ def test_mark_simplify_fraction_not_reduced():
     r = client.post("/mark", json={"id": "q4", "answer": "6/8"})
     b = r.json()
     assert b["ok"] and not b["correct"] and b["score"] == 0
+
+
+def test_mark_simplify_fraction_negative_incorrect():
+    r = client.post("/mark", json={"id": "q4", "answer": "-3/4"})
+    b = r.json()
+    assert b["ok"] and not b["correct"] and b["score"] == 0
+    # shows the canonical expected positive answer
+    assert b.get("expected") == "3/4"
+
+
+def test_mark_simplify_fraction_negative_decimal_incorrect():
+    r = client.post("/mark", json={"id": "q4", "answer": "-0.75"})
+    b = r.json()
+    assert b["ok"] and not b["correct"] and b["score"] == 0
+    assert b.get("expected") == "3/4"
+
+
+def test_mark_simplify_fraction_negative_not_reduced_incorrect():
+    r = client.post("/mark", json={"id": "q4", "answer": "-6/8"})
+    b = r.json()
+    assert b["ok"] and not b["correct"] and b["score"] == 0
+    # no "reduce" hint because the value is wrong sign; we just show expected
+    assert b.get("expected") == "3/4"
+    assert (b.get("feedback") or "") == ""
