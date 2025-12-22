@@ -53,5 +53,7 @@ class MarkBatchRequest(BaseModel):
 class MarkBatchResponse(BaseModel):
     ok: bool
     total: int
+    correct: int
     results: List[MarkBatchItem]
     attempt_id: Optional[int] = None
+    duration_ms: Optional[int] = None

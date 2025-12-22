@@ -52,6 +52,7 @@ TRANSFORMS = standard_transformations + (
 _MAX_OPS = 200
 _MAX_INT_DIGITS = 200
 _MAX_EXPONENT_ABS = 2000
+_MAX_RESULT_DIGITS = 120  # rough cap on result magnitude to avoid huge bigint evaluation
 
 
 def _validate_answer_text(s: str) -> Optional[str]:
@@ -113,6 +114,60 @@ def _assert_finite_sym(val: Any) -> None:
         raise ValueError(_NON_FINITE_MSG)
 
 
+def _has_nested_exponent(expr: str) -> bool:
+    """
+    Cheap string-level guard to catch nested exponents like 2^(10^10) or 2^3^4
+    without invoking SymPy. We conservatively treat cases as 'too complex'
+    when:
+      - There's a caret, and the exponent parenthesis contains another caret, or
+      - There's a chain like a^b^c (right-associative power chain).
+    This avoids heavy parsing/evaluation paths.
+    """
+    s = expr.replace(" ", "")
+    # Quick positive cases
+    if "^" not in s:
+        return False
+
+    # Detect a^( ...^... )
+    i = 0
+    n = len(s)
+    while i < n:
+        if s[i] != "^":
+            i += 1
+            continue
+        # Move to start of exponent token
+        i += 1
+        # Allow unary sign in exponent
+        while i < n and s[i] in "+-":
+            i += 1
+        if i < n and s[i] == "(":
+            # Scan balanced parens to find exponent substring
+            depth = 1
+            i += 1
+            start = i
+            while i < n and depth > 0:
+                c = s[i]
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                i += 1
+            sub = s[start : i - 1] if depth == 0 else s[start:]
+            if "^" in sub:
+                return True
+            continue
+        else:
+            # Simple exponent token (digits/decimal). If another caret immediately follows
+            # that token, it's a chain a^b^c which we also consider too complex.
+            start = i
+            while i < n and s[i] not in "+-*/^()":
+                i += 1
+            if i < n and s[i] == "^":
+                return True
+            continue
+    return False
+
+
 def _assert_expr_complexity(sym: Any) -> None:
     """
     Treat plain scalars as trivial; only inspect SymPy expressions for complexity.
@@ -123,18 +178,12 @@ def _assert_expr_complexity(sym: Any) -> None:
             raise ValueError(_NON_FINITE_MSG)
         return
 
-    # SymPy numbers
+    # SymPy numbers: complexity for scalars is trivial; don't coerce to float here.
     try:
         is_number = bool(getattr(sym, "is_number", False) or getattr(sym, "is_Number", False))
     except Exception:
         is_number = False
     if is_number:
-        try:
-            f = float(sym)
-            if not math.isfinite(f):
-                raise ValueError(_NON_FINITE_MSG)
-        except Exception:
-            pass
         return
 
     # SymPy expression
@@ -147,27 +196,67 @@ def _assert_expr_complexity(sym: Any) -> None:
     try:
         if hasattr(sym, "preorder_traversal"):
             for node in sym.preorder_traversal():
+                # Very large integer literals inside the tree
                 if getattr(node, "is_Integer", False):
+                    # Avoid int(node) for gigantic Integers; use decimal length of str(node)
+                    s = str(node)
+                    if s.startswith("-"):
+                        s = s[1:]
+                    if len(s) > _MAX_INT_DIGITS:
+                        raise ValueError(_TOO_COMPLEX_MSG)
+
+                # Exponent complexity: catch nested exponents early, e.g., 2^(10^10)
+                if isinstance(node, Pow):
+                    exp = node.exp
+
+                    # Nested exponent like a^(b^c) — reject as too complex
+                    if isinstance(exp, Pow):
+                        raise ValueError(_TOO_COMPLEX_MSG)
+
+                    # Approximate result digit growth: if base > 1 and exponent is positive and
+                    # the estimated digits exceed our cap, treat as too complex *before* evaluation.
                     try:
-                        n = int(node)
-                        if len(str(abs(n))) > _MAX_INT_DIGITS:
+                        base = node.base
+                        # best-effort numeric approximation; avoid raising on symbols
+                        if getattr(base, "is_real", False) and getattr(exp, "is_real", False):
+                            # exponent magnitude
+                            if getattr(exp, "is_Integer", False):
+                                e_float = float(exp)
+                            else:
+                                e_float = float(exp.evalf(8))
+                            # base magnitude
+                            b_abs = float(abs(base.evalf(8)))
+                            if b_abs > 1.0 and e_float > 0:
+                                # digits ~ e * log10(b)
+                                digits_est = e_float * math.log10(b_abs)
+                                if digits_est > _MAX_RESULT_DIGITS:
+                                    raise ValueError(_TOO_COMPLEX_MSG)
+                    except Exception:
+                        # If estimation fails, fall back to other guards
+                        pass
+
+                    # If exponent subtree itself is too "big" by ops, reject
+                    try:
+                        if hasattr(exp, "count_ops") and exp.count_ops() > 20:
                             raise ValueError(_TOO_COMPLEX_MSG)
                     except Exception:
                         raise ValueError(_TOO_COMPLEX_MSG)
-                if isinstance(node, Pow):
-                    exp = node.exp
-                    if getattr(exp, "is_number", False):
+
+                    # Simple numeric exponent caps
+                    if getattr(exp, "is_Integer", False):
+                        # This is safe for small integers (e.g., 3001)
+                        e = int(exp)
+                        if abs(e) > _MAX_EXPONENT_ABS:
+                            raise ValueError(_TOO_COMPLEX_MSG)
+                    elif getattr(exp, "is_number", False):
+                        # Don't force full evaluation; use a tiny evalf window if available
                         try:
-                            e = int(exp)
-                            if abs(e) > _MAX_EXPONENT_ABS:
+                            f = float(exp.evalf(6))
+                            if not math.isfinite(f) or abs(f) > _MAX_EXPONENT_ABS:
                                 raise ValueError(_TOO_COMPLEX_MSG)
                         except Exception:
-                            try:
-                                f = float(exp)
-                                if not math.isfinite(f) or abs(f) > _MAX_EXPONENT_ABS:
-                                    raise ValueError(_TOO_COMPLEX_MSG)
-                            except Exception:
-                                raise ValueError(_TOO_COMPLEX_MSG)
+                            # If we can't cheaply estimate its magnitude, treat as too complex
+                            raise ValueError(_TOO_COMPLEX_MSG)
     except ValueError:
         raise
     except Exception:
@@ -178,20 +267,49 @@ def _assert_expr_complexity(sym: Any) -> None:
 
 
 def _eval_numeric(expr: str) -> float:
+    """
+    Parse without evaluation first to enforce complexity limits safely,
+    then evaluate and finalize numeric value.
+    """
+    # 0) Very fast lexical guard for nested exponents/chains to avoid expensive parsing
+    if _has_nested_exponent(expr):
+        raise ValueError(_TOO_COMPLEX_MSG)
+
+    # 1) Non-evaluated parse for cheap/safe complexity checks
+    sym_raw = parse_expr(expr, transformations=TRANSFORMS, evaluate=False)
+    _assert_expr_complexity(sym_raw)
+
+    # 2) Evaluate now that we know it's not absurd
     sym = parse_expr(expr, transformations=TRANSFORMS, evaluate=True)
-    _assert_expr_complexity(sym)
     _assert_finite_sym(sym)
-    val = float(sym.evalf())
+    _assert_expr_complexity(sym)  # second pass catches huge computed integers
+
+    try:
+        val = float(sym.evalf())
+    except (OverflowError, ValueError):
+        raise ValueError(_NON_FINITE_MSG)
+
     if not math.isfinite(val):
         raise ValueError(_NON_FINITE_MSG)
     return val
 
 
 def _canonical_fraction_str(expr: str) -> Tuple[str, Optional[List[str]]]:
+    """
+    Return a canonical string for a fraction if possible, else stringified value.
+    Enforce complexity on a non-evaluated tree first, then evaluate.
+    """
+    # Guard pass
+    sym_raw = parse_expr(expr, transformations=TRANSFORMS, evaluate=False)
+    _assert_expr_complexity(sym_raw)
+
+    # Evaluate and normalize
     sym = parse_expr(expr, transformations=TRANSFORMS, evaluate=True)
+    _assert_finite_sym(sym)
     _assert_expr_complexity(sym)
     val = nsimplify(sym)
     _assert_finite_sym(val)
+
     if isinstance(val, Rational):
         return f"{val.p}/{val.q}", None
     return str(val), None
@@ -261,6 +379,9 @@ def _prepare_expected(q: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[
             # Fallback to sympy for anything non-standard
             try:
                 exp_str, _ = _canonical_fraction_str(raw_str)
+                # Build a sym for equality checks with guard-first parsing
+                sym_raw = parse_expr(raw_str, transformations=TRANSFORMS, evaluate=False)
+                _assert_expr_complexity(sym_raw)
                 exp_sym = parse_expr(raw_str, transformations=TRANSFORMS, evaluate=True)
                 _assert_expr_complexity(exp_sym)
                 exp_val = nsimplify(exp_sym)
@@ -283,6 +404,8 @@ def _prepare_expected(q: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[
     except Exception:
         # Fallback to sympy to allow expressions like "3^2 + 4^2" as the stored expected.
         try:
+            expected_sym_raw = parse_expr(raw_str, transformations=TRANSFORMS, evaluate=False)
+            _assert_expr_complexity(expected_sym_raw)
             expected_sym = parse_expr(raw_str, transformations=TRANSFORMS, evaluate=True)
             _assert_expr_complexity(expected_sym)
             expected_val_sym = nsimplify(expected_sym)
